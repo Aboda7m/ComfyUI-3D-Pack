@@ -16,7 +16,22 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
 
-from diffusers.models.controlnet import ControlNetOutput
+# Universal Import Logic for Compatibility with new Diffusers versions
+try:
+    from diffusers.models.controlnet import ControlNetOutput
+except ImportError:
+    try:
+        from diffusers.models.outputs import ControlNetOutput
+    except ImportError:
+        try:
+            from diffusers.models.modeling_outputs import ControlNetOutput
+        except ImportError:
+            try:
+                from diffusers.models.controlnet_sd3 import ControlNetOutput
+            except ImportError:
+                # Fallback to the base output class if specific one is missing
+                from diffusers.utils import BaseOutput as ControlNetOutput
+
 from diffusers.models import ControlNetModel
 
 
