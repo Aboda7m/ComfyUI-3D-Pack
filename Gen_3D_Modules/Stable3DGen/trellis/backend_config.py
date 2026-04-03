@@ -4,10 +4,13 @@ import os
 import logging
 import importlib
 
+# Setup Logger
+logger = logging.getLogger(__name__)
+
 # Global variables
 BACKEND = 'spconv'  # Default sparse backend
-DEBUG = False       # Debug mode flag
-ATTN = 'xformers' # Default attention backend
+DEBUG = False        # Debug mode flag
+ATTN = 'sdpa'       # Default set to sdpa for compatibility (RTX 5080/PyTorch 2.0+)
 SPCONV_ALGO = 'implicit_gemm'  # Default algorithm
 
 def get_spconv_algo() -> str:
@@ -28,8 +31,6 @@ def set_spconv_algo(algo: Literal['implicit_gemm', 'native', 'auto']) -> bool:
     logger.info(f"Set spconv algorithm to: {algo}")
     return True
 
-logger = logging.getLogger(__name__)
-
 def _try_import_xformers() -> bool:
     try:
         import xformers.ops
@@ -49,7 +50,6 @@ def _try_import_sageattention() -> bool:
         import torch.nn.functional as F
         from sageattention import sageattn
         F.scaled_dot_product_attention = sageattn
-        #import sageattention
         return True
     except ImportError:
         return False
@@ -114,11 +114,18 @@ def __from_env():
         BACKEND = env_sparse_backend
     if env_sparse_debug is not None:
         DEBUG = env_sparse_debug == '1'
+    
+    # If environment variable exists and is valid, use it; otherwise, default is now 'sdpa'
     if env_sparse_attn is not None and env_sparse_attn in ['xformers', 'flash_attn', 'sage', 'sdpa', 'naive']:
         ATTN = env_sparse_attn
-        os.environ['SPARSE_ATTN_BACKEND'] = env_sparse_attn
-        os.environ['ATTN_BACKEND'] = env_sparse_attn
-        
+    else:
+        # Final fallback check: if ATTN is still 'xformers' but not installed, force 'sdpa'
+        if ATTN == 'xformers' and not _try_import_xformers():
+            ATTN = 'sdpa'
+
+    os.environ['SPARSE_ATTN_BACKEND'] = ATTN
+    os.environ['ATTN_BACKEND'] = ATTN
+    
     logger.info(f"[SPARSE] Backend: {BACKEND}, Attention: {ATTN}")
 
 def set_backend(backend: Literal['spconv', 'torchsparse']) -> bool:
@@ -129,96 +136,61 @@ def set_backend(backend: Literal['spconv', 'torchsparse']) -> bool:
     logger.info(f"Setting sparse backend to: {backend}")
 
     if backend == 'spconv':
-        try:
-            import spconv
+        if _try_import_spconv():
             BACKEND = 'spconv'
             os.environ['SPARSE_BACKEND'] = 'spconv'
             return True
-        except ImportError:
+        else:
             logger.warning("spconv not available")
             return False
             
     elif backend == 'torchsparse':
-        try:
-            import torchsparse
+        if _try_import_torchsparse():
             BACKEND = 'torchsparse'
             os.environ['SPARSE_BACKEND'] = 'torchsparse'
             return True
-        except ImportError:
+        else:
             logger.warning("torchsparse not available")
             return False
     
     return False
 
 def set_sparse_backend(backend: Literal['spconv', 'torchsparse'], algo: str = None) -> bool:
-    """Alias for set_backend for backwards compatibility
-    
-    Parameters:
-        backend: The sparse backend to use
-        algo: The algorithm to use (only relevant for spconv backend)
-    """
-    # Call set_backend first
     result = set_backend(backend)
-    
-    # If algorithm is provided and backend was set successfully
     if algo is not None and result:
         set_spconv_algo(algo)
-        
     return result
 
 def set_debug(debug: bool):
-    """Set debug mode"""
     global DEBUG
     DEBUG = debug
-    if debug:
-        os.environ['SPARSE_DEBUG'] = '1'
-    else:
-        os.environ['SPARSE_DEBUG'] = '0'
+    os.environ['SPARSE_DEBUG'] = '1' if debug else '0'
 
 def set_attn(attn: Literal['xformers', 'flash_attn', 'sage', 'sdpa', 'naive']) -> bool:
     """Set attention backend with validation"""
     global ATTN
-    
     attn = attn.lower().strip()
     logger.info(f"Setting attention backend to: {attn}")
 
     if attn == 'xformers' and _try_import_xformers():
         ATTN = 'xformers'
-        os.environ['SPARSE_ATTN_BACKEND'] = 'xformers'
-        os.environ['ATTN_BACKEND'] = 'xformers'
-        return True
-        
     elif attn == 'flash_attn' and _try_import_flash_attn():
         ATTN = 'flash_attn'
-        os.environ['SPARSE_ATTN_BACKEND'] = 'flash_attn'
-        os.environ['ATTN_BACKEND'] = 'flash_attn'
-        return True
-        
     elif attn == 'sage' and _try_import_sageattention():
         ATTN = 'sage'
-        os.environ['SPARSE_ATTN_BACKEND'] = 'sage'
-        os.environ['ATTN_BACKEND'] = 'sage'
-        return True
-        
     elif attn == 'sdpa':
         ATTN = 'sdpa'
-        os.environ['SPARSE_ATTN_BACKEND'] = 'sdpa'
-        os.environ['ATTN_BACKEND'] = 'sdpa'
-        return True
-    
     elif attn == 'naive':
         ATTN = 'naive'
-        os.environ['SPARSE_ATTN_BACKEND'] = 'naive'
-        os.environ['ATTN_BACKEND'] = 'naive'
-        return True
-        
+    else:
+        logger.warning(f"Attention backend {attn} not available or failed to import")
+        return False
 
-    logger.warning(f"Attention backend {attn} not available")
-    return False
+    os.environ['SPARSE_ATTN_BACKEND'] = ATTN
+    os.environ['ATTN_BACKEND'] = ATTN
+    return True
 
-# Add alias for backwards compatibility 
 def set_attention_backend(backend: Literal['xformers', 'flash_attn', 'sage', 'sdpa']) -> bool:
-    """Alias for set_attn for backwards compatibility"""
     return set_attn(backend)
 
 # Initialize from environment variables on module import

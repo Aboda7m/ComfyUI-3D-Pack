@@ -25,17 +25,7 @@ class TimestepEmbedder(nn.Module):
     def timestep_embedding(t, dim, max_period=10000):
         """
         Create sinusoidal timestep embeddings.
-
-        Args:
-            t: a 1-D Tensor of N indices, one per batch element.
-                These may be fractional.
-            dim: the dimension of the output.
-            max_period: controls the minimum frequency of the embeddings.
-
-        Returns:
-            an (N, D) Tensor of positional embeddings.
         """
-        # https://github.com/openai/glide-text2im/blob/main/glide_text2im/nn.py
         half = dim // 2
         freqs = torch.exp(
             -np.log(max_period) * torch.arange(start=0, end=half, dtype=torch.float32) / half
@@ -48,6 +38,10 @@ class TimestepEmbedder(nn.Module):
 
     def forward(self, t):
         t_freq = self.timestep_embedding(t, self.frequency_embedding_size)
+        # --- SURGICAL FIX START ---
+        # Cast t_freq to match the MLP's weight precision (likely FP16 on your setup)
+        t_freq = t_freq.to(self.mlp[0].weight.dtype)
+        # --- SURGICAL FIX END ---
         t_emb = self.mlp(t_freq)
         return t_emb
 
@@ -130,25 +124,15 @@ class SparseStructureFlowModel(nn.Module):
 
     @property
     def device(self) -> torch.device:
-        """
-        Return the device of the model.
-        """
         return next(self.parameters()).device
 
     def convert_to_fp16(self) -> None:
-        """
-        Convert the torso of the model to float16.
-        """
         self.blocks.apply(convert_module_to_f16)
 
     def convert_to_fp32(self) -> None:
-        """
-        Convert the torso of the model to float32.
-        """
         self.blocks.apply(convert_module_to_f32)
 
     def initialize_weights(self) -> None:
-        # Initialize transformer layers:
         def _basic_init(module):
             if isinstance(module, nn.Linear):
                 torch.nn.init.xavier_uniform_(module.weight)
@@ -156,11 +140,9 @@ class SparseStructureFlowModel(nn.Module):
                     nn.init.constant_(module.bias, 0)
         self.apply(_basic_init)
 
-        # Initialize timestep embedding MLP:
         nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
         nn.init.normal_(self.t_embedder.mlp[2].weight, std=0.02)
 
-        # Zero-out adaLN modulation layers in DiT blocks:
         if self.share_mod:
             nn.init.constant_(self.adaLN_modulation[-1].weight, 0)
             nn.init.constant_(self.adaLN_modulation[-1].bias, 0)
@@ -169,7 +151,6 @@ class SparseStructureFlowModel(nn.Module):
                 nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
                 nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
 
-        # Zero-out output layers:
         nn.init.constant_(self.out_layer.weight, 0)
         nn.init.constant_(self.out_layer.bias, 0)
 

@@ -1,6 +1,7 @@
 from typing import *
 
-BACKEND = 'xformers' 
+# Changed default from 'xformers' to 'sdpa' to support RTX 5080 (Blackwell)
+BACKEND = 'sdpa' 
 DEBUG = False
 
 def __from_env():
@@ -23,7 +24,7 @@ def __from_env():
 __from_env()
     
 
-def set_backend(backend: Literal['xformers', 'flash_attn']):
+def set_backend(backend: Literal['xformers', 'flash_attn', 'sdpa', 'naive']):
     global BACKEND
     BACKEND = backend
 
